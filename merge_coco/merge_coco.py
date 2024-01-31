@@ -28,7 +28,7 @@ import shutil
 # Directories
 in_dir_list = ["/mnt/lts/nis_lab_research/data/coco_files/raw/far_rev_708_coco",
                "/mnt/lts/nis_lab_research/data/coco_files/raw/shah_b1_539_21",
-               "/mnt/lts/nis_lab_research/data/coco_files/raw/shah_b2_704_22-24",
+               "/mnt/lts/nis_lab_research/data/coco_files/raw/shah_b2_691_22-24",
                "/mnt/lts/nis_lab_research/data/coco_files/raw/shah_b3_704_25-27"]
 
 out_dir = "/mnt/lts/nis_lab_research/data/coco_files/merged/far_shah_b1-b3"
