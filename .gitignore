@@ -1,0 +1,4 @@
+*.png
+*result*.json
+server_info*
+cmds.txt
