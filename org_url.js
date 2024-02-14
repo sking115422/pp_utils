@@ -22,11 +22,11 @@ const fs = require('fs');
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // URL file of interest
-origin_file = "./wp_upload/upload_url/test123.txt"
+origin_file = "/mnt/lts/nis_lab_research/data/top-1m/cleaned/cleaned_b4_b5_20000.txt"
 // Directory to subdivide url file into smaller more manageable files
-target_dir = "./wp_upload/upload_url/"
+target_dir = "/mnt/lts/nis_lab_research/data/top-1m/cleaned/"
 // Number of url per file
-num_per_sub = 250
+num_per_sub = 2000
 
 
 
