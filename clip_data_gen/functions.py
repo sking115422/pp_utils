@@ -8,7 +8,6 @@ import easyocr
 import numpy as np
 import torch
 
-
 def process_image_annotation(img_fp, out_dir, img_bn, ann, cat_map, cat_id, bg_color, out_res_w, out_res_h, j):
     
         elem_img = crop_image(img_fp, ann["bbox"], 0.05)

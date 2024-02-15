@@ -3,6 +3,8 @@ import json
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from multiprocessing import set_start_method, Lock
 import torch
+import time
+from threading import Thread
 
 # Importing custom functions
 from functions import process_image_annotation
@@ -13,7 +15,22 @@ out_dir = "/mnt/nis_lab_research/data/clip_data/test"
 out_res_w = 224
 out_res_h = 224
 bg_color = "white"
-batch_size = 30  # Define the size of each batch
+batch_size = 20  # Define the size of each batch
+memory_utilization_threshold = 0.75  # GPUs with memory utilization below this threshold are considered underutilized
+time_int_check = .5  # Time interval (in seconds) for checking GPU utilization
+gpus_to_use = [0, 1]
+shutdown_flag = False # Global flag to signal threads to stop
+
+def check_gpu_memory_utilization(threshold):
+    underutilized_gpus = []
+    for i in gpus_to_use:
+        torch.cuda.set_device(i)
+        total_memory = torch.cuda.get_device_properties(i).total_memory
+        memory_allocated = torch.cuda.memory_allocated(i)
+        memory_free = total_memory - memory_allocated
+        if (memory_free / total_memory) > threshold:
+            underutilized_gpus.append(i)
+    return underutilized_gpus
 
 def process_batch(batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print_lock, gpu_id):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
@@ -32,6 +49,18 @@ def process_batch(batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print
                     print(f"Completed images: {completed}/{len(batch)}, Batch item: {futures[future]}")
             except Exception as exc:
                 print(f"Generated an exception: {exc}")
+
+def gpu_worker(gpu_id, batches_queue, cat_map, bg_color, out_res_w, out_res_h, print_lock):
+    global shutdown_flag
+    while not shutdown_flag or batches_queue:  # Keep running until signaled to shutdown or queue is empty
+        if batches_queue:
+            batch = batches_queue.pop(0)
+            process_batch(batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print_lock, gpu_id)
+        else:
+            time.sleep(time_int_check)  # Wait for the next interval or for new batches
+
+    # Perform any cleanup here if necessary
+    print(f"GPU Worker {gpu_id} shutting down.")
 
 def main():
     # Load JSON data
@@ -59,9 +88,16 @@ def main():
     # Check CUDA availability and clear cache
     torch.cuda.empty_cache()
     num_gpus = torch.cuda.device_count()
-    gpu_round_robin = 0
-    
-    # Process images in batches
+
+    # Initialize GPU worker threads
+    gpu_batches_queues = [[] for _ in range(num_gpus)]  # Create a queue for each GPU
+    worker_threads = []
+    for gpu_id in range(num_gpus):
+        t = Thread(target=gpu_worker, args=(gpu_id, gpu_batches_queues[gpu_id], cat_map, bg_color, out_res_w, out_res_h, print_lock))
+        t.start()
+        worker_threads.append(t)
+
+    # Process images in batches and distribute them across GPUs
     current_batch = []
     for i, img in enumerate(img_list):
         img_bn = os.path.basename(img["file_name"])[0:-4]
@@ -76,15 +112,26 @@ def main():
                 
                 # Process the current batch if it reaches the batch size
                 if len(current_batch) >= batch_size:
-                    gpu_id = gpu_round_robin % num_gpus  # Determine which GPU to use
-                    process_batch(current_batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print_lock, gpu_id)
+                    underutilized_gpus = check_gpu_memory_utilization(memory_utilization_threshold)
+                    if underutilized_gpus:
+                        # Choose the least utilized GPU that has the shortest queue
+                        target_gpu = min(underutilized_gpus, key=lambda gpu: len(gpu_batches_queues[gpu]))
+                        gpu_batches_queues[target_gpu].append(current_batch)
                     current_batch = []  # Reset the batch
-                    gpu_round_robin += 1  # Move to the next GPU for the next batch
 
-    # Process any remaining images in the last batch
+    # Ensure all batches are assigned to a GPU queue
     if current_batch:
-        gpu_id = gpu_round_robin % num_gpus
-        process_batch(current_batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print_lock, gpu_id)
+        least_loaded_gpu = min(range(num_gpus), key=lambda gpu: len(gpu_batches_queues[gpu]))
+        gpu_batches_queues[least_loaded_gpu].append(current_batch)
+        
+    global shutdown_flag
+    shutdown_flag = True  # Signal all threads to shutdown
+
+    for t in worker_threads:
+        t.join()  # Wait for all threads to complete
+
+    print("All GPU workers have completed.")
 
 if __name__ == "__main__":
     main()
+
