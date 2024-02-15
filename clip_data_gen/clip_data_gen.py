@@ -41,9 +41,10 @@ def process_batch(batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print
                     print(f"Completed on GPU: {gpu_id}, Result: {result}")
             except Exception as exc:
                 print(f"Generated an exception: {exc}")
+                
+    return len(futures)
 
 def gpu_worker(gpu_id, batches_queue, cat_map, bg_color, out_res_w, out_res_h, print_lock, start_event, stop_event):
-    start_event.wait()
     while not stop_event.is_set():
         try:
             batch = batches_queue.get(timeout=time_int_check)  # Blocking get with timeout
@@ -89,7 +90,7 @@ def main():
 
     # Process images in batches and distribute them across GPUs
     current_batch = []
-    for img in img_list[0:2]:
+    for img_ctr, img in enumerate(img_list):
         img_bn = os.path.basename(img["file_name"])[0:-4]
         img_fp = os.path.join(in_dir, "images", os.path.basename(img["file_name"]))
         img_id = img["id"]
@@ -97,6 +98,7 @@ def main():
         for ann_ctr, ann in enumerate(ann_list):
             ann_img_id = ann["image_id"]
             cat_id = ann["category_id"]
+            
             if img_id == ann_img_id:
                 current_batch.append((img_fp, img_bn, ann, cat_id, ann_ctr))
                 
@@ -117,14 +119,15 @@ def main():
     start_event.set()
 
     # Handle the last partial batch
-    if current_batch:
+    while current_batch:
         for i, gpu_id in enumerate(gpus_to_use):
             if check_gpu_memory_utilization(memory_utilization_threshold, gpu_id):
-                gpu_batches_queues[i].append(current_batch)
+                gpu_batches_queues[i].put(current_batch)
                 break
 
     # Signal to stop and wait for all worker threads to finish
     stop_event.set()
+    
     for t in worker_threads:
         t.join()
 
