@@ -33,8 +33,6 @@ def process_image_annotation(img_fp, out_dir, img_bn, ann, cat_map, cat_id, bg_c
         with open(os.path.join(out_dir, cat_map[cat_id], img_bn + "-" + str(j) + ".txt"), "w+") as f:
             f.write(ocr_txt)
             
-        print(complete, img_fp, j)
-            
 def crop_image(file_path, bounding_box, padding):
     
     with Image.open(file_path) as img:
