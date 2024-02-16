@@ -14,9 +14,9 @@ out_res_w = 224
 out_res_h = 224
 bg_color = "white"
 padding = 0.05
-mem_util_thold = .75
+mem_util_thold = .60
 check_interval = 1
-wait_interval = .5
+wait_interval = 1
 gpu_id = 0  
 
 def check_gpu_memory(mem_util_thold, gpu_id):
@@ -61,12 +61,14 @@ def main(gpu_id):
         
     with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
         
+        ctr = 0
         futures = {}
         for i, img in enumerate(img_list):
             print("OG IMG", i, "STARTED")
             img_bn = os.path.basename(img["file_name"])[0:-4]
             img_fp = os.path.join(in_dir, "images", os.path.basename(img["file_name"]))
             img_id = img["id"]
+            inc = 0
             for j, ann in enumerate(ann_list):
                 ann_img_id = ann["image_id"]
                 cat_id = ann["category_id"]
@@ -76,9 +78,10 @@ def main(gpu_id):
                     future = executor.submit(process_image_annotation, img_fp, out_dir, img_bn, ann, cat_map, cat_id, bg_color, out_res_w, out_res_h, j)
                     futures[future] = (i, j)
                     time.sleep(wait_interval)
+                    inc = inc + 1
                 
             completed = 0
-            for future in as_completed(futures):
+            for future in as_completed(futures)[ctr:ctr+inc]:
                 try:
                     result = future.result()
                     with print_lock:
@@ -86,6 +89,8 @@ def main(gpu_id):
                         print(f"Completed images: {completed}, {futures[future]}")
                 except Exception as exc:
                     print(f"Generated an exception: {exc}")
+                    
+            ctr = ctr + inc
 
 if __name__ == "__main__":
     main(gpu_id)
