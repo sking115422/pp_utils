@@ -1,69 +1,77 @@
 import os
 import json
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from multiprocessing import set_start_method, Lock
 import torch
-
-# Importing custom functions
+import multiprocessing
+from multiprocessing import Process, Queue, current_process, set_start_method
+import time
+import GPUtil
 from functions import process_image_annotation
 
-# Configuration parameters
+# Global Variables
 in_dir = "/mnt/nis_lab_research/data/coco_files/raw/shah_b1_539_21"
-out_dir = "/mnt/nis_lab_research/data/clip_data/test"
+out_dir = "/mnt/nis_lab_research/data/clip_data/shah_b1_539_21"
 out_res_w = 224
 out_res_h = 224
 bg_color = "white"
-batch_size = 30  # Define the size of each batch
+padding = 0.05
+check_interval = .1
+wait_interval = .05
+gpu_id = 0
+num_workers = 20
 
-def process_batch(batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print_lock, gpu_id):
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
-    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-        futures = {}
-        for img_fp, img_bn, ann, cat_id, j in batch:
-            future = executor.submit(process_image_annotation, img_fp, out_dir, img_bn, ann, cat_map, cat_id, bg_color, out_res_w, out_res_h, j)
-            futures[future] = (img_bn, j)
+def worker(input_queue, gpu_id):
+    """
+    Worker function to process tasks. Manually clears GPU memory after each task.
+    """
+    torch.cuda.set_device(gpu_id)  # Ensure this worker uses the correct GPU
+
+    while True:
+        task = input_queue.get()
+        if task is None:
+            break  # End of task signal
+
+        img_fp, out_dir, img_bn, ann, cat_map, cat_id, bg_color, out_res_w, out_res_h, j = task
         
-        completed = 0
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                with print_lock:
-                    completed += 1
-                    print(f"Completed images: {completed}/{len(batch)}, Batch item: {futures[future]}")
-            except Exception as exc:
-                print(f"Generated an exception: {exc}")
+        try:
+            process_image_annotation(img_fp, out_dir, img_bn, ann, cat_map, cat_id, bg_color, out_res_w, out_res_h, j)
+        finally:
+            torch.cuda.empty_cache()  # Free unused memory from PyTorch
+        
+        print(f"{current_process().name} -> processed task: {j}")
 
-def main():
-    # Load JSON data
+    torch.cuda.empty_cache()
+
+def main(gpu_id):
+    
+    torch.cuda.empty_cache()
+    torch.cuda.set_device(gpu_id)
+    
     with open(os.path.join(in_dir, "result.json")) as f:
         obj = json.load(f)
-
+    
     img_list = obj["images"]
-    ann_list = obj["annotations"]
     cat_list = obj["categories"]
-
-    # Create category map
+    ann_list = obj["annotations"]
+    
     cat_map = [cat["name"] for cat in cat_list]
-    cat_map = sorted(cat_map)
-
-    # Ensure output directories exist
+    
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
     for cat in cat_list:
         os.makedirs(os.path.join(out_dir, cat["name"]), exist_ok=True)
-
-    # Initialize multiprocessing
-    set_start_method('spawn', True)
-    print_lock = Lock()
-
-    # Check CUDA availability and clear cache
-    torch.cuda.empty_cache()
-    num_gpus = torch.cuda.device_count()
-    gpu_round_robin = 0
     
-    # Process images in batches
-    current_batch = []
+    set_start_method('spawn', True)
+    input_queue = Queue()
+
+    # Start worker processes
+    processes = [Process(target=worker, args=(input_queue, gpu_id)) for _ in range(num_workers)]
+    for p in processes:
+        p.start()
+    
+    ctr = 0
+    # Submit tasks to the queue
     for i, img in enumerate(img_list):
+        print("OG IMG", i, "STARTED")
         img_bn = os.path.basename(img["file_name"])[0:-4]
         img_fp = os.path.join(in_dir, "images", os.path.basename(img["file_name"]))
         img_id = img["id"]
@@ -72,20 +80,23 @@ def main():
             ann_img_id = ann["image_id"]
             cat_id = ann["category_id"]
             if img_id == ann_img_id:
-                current_batch.append((img_fp, img_bn, ann, cat_id, j))
-                
-                # Process the current batch if it reaches the batch size
-                if len(current_batch) >= batch_size:
-                    gpu_id = gpu_round_robin % num_gpus  # Determine which GPU to use
-                    process_batch(current_batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print_lock, gpu_id)
-                    current_batch = []  # Reset the batch
-                    gpu_round_robin += 1  # Move to the next GPU for the next batch
 
-    # Process any remaining images in the last batch
-    if current_batch:
-        gpu_id = gpu_round_robin % num_gpus
-        process_batch(current_batch, out_dir, cat_map, bg_color, out_res_w, out_res_h, print_lock, gpu_id)
+                task = (img_fp, out_dir, img_bn, ann, cat_map, cat_id, bg_color, out_res_w, out_res_h, j)
+                input_queue.put(task)
+                time.sleep(wait_interval)
+                
+                ctr += 1
+                
+    print(f"Total Tasks: {ctr}")
+    
+    # Signal the worker processes to exit by sending a 'None' value for each worker
+    for _ in range(num_workers):
+        input_queue.put(None)
+    
+    # Wait for all worker processes to finish
+    for p in processes:
+        p.join()
 
 if __name__ == "__main__":
-    main()
+    main(gpu_id)
 
