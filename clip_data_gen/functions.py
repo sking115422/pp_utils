@@ -94,9 +94,9 @@ def tess_ocr(image):
         return extracted_text
     
 def easy_ocr(image):
-    reader = easyocr.Reader(['en'], gpu=True)
-    results = reader.readtext(np.array(image), paragraph=True)
     try:
+        reader = easyocr.Reader(['en'], gpu=True)
+        results = reader.readtext(np.array(image), paragraph=True)
         extracted_text = results[0][-1]
     except:
         extracted_text = ""
